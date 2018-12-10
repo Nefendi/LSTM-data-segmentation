@@ -1,7 +1,9 @@
 import numpy as np
 import tensorflow as tf
 
-data = open('war_and_peace.txt', 'r').read()
+with open('war_and_peace.txt', 'r') as f:
+    data = f.read()
+
 data = list(data)
 chars = list(set(data))
 
@@ -10,10 +12,17 @@ SEQ_LENGTH = 10
 NUM_OF_SEQ = len(data) // SEQ_LENGTH
 
 # Size of tensor containing hidden state of the cell, does not have any correlation with input, output or target
-LSTM_SIZE = 256
+LSTM_SIZE = 64
 # Number of LSTM cells to be used
-LSTM_NUMBER = 4
-NUM_EPOCHS = 60
+LSTM_NUMBER_FIRST_LAYER = 6
+LSTM_NUMBER_SECOND_LAYER = 4
+FIRST_LAYER_UNITS = 256
+NUM_EPOCHS = 30
+
+print(f'LSTM_SIZE = {LSTM_SIZE}')
+print(f'LSTM_NUMBER_FIRST_LAYER = {LSTM_NUMBER_FIRST_LAYER}')
+print(f'LSTM_NUMBER_SECOND_LAYER = {LSTM_NUMBER_SECOND_LAYER}')
+print(f'FIRST_LAYER_UNITS = {FIRST_LAYER_UNITS} \n\n')
 
 # Data preparation, one-hot encoded characters
 
@@ -66,35 +75,75 @@ input = tf.placeholder(tf.float32, shape=(
 targets = tf.placeholder(tf.float32, shape=(None,
                                             SEQ_LENGTH, VOCAB_SIZE), name='targets')
 
+
+################################# FIRST LAYER #################################
+
 # Creation of LSTM cells and setting size of their hidden tensors.
 # Creating more than one LSTM does not seem to improve the learning process.
-cells = [tf.contrib.rnn.LSTMBlockCell(
-    num_units=LSTM_SIZE) for i in range(LSTM_NUMBER)]
+cells_first_layer = [tf.contrib.rnn.LSTMBlockCell(
+    num_units=LSTM_SIZE, name=f'lstm_nr_{_}_first_layer') for _ in range(LSTM_NUMBER_FIRST_LAYER)]
 
 # A list for storing last elements of outputs of every dynamic_rnn unrolling each LSTM cell
-all_outputs = []
+outputs_first_layer = []
 
 # Unrolling each LSTM cell.
 # Input to the network needs to be specified as an argument. The returned values are: outputs and state.
 # Outputs is a list containing a hidden state tensor for every timestep when the network was unrolled.
 # State contains both the last hidden state and cell state, so outputs[-1] should be generally equal to state.h.
 # State will not be used, so its assigned to _
-
-# Dynamic scope naming (with 'i' variable) is needed in order not to share weights between LSTMs
-i = 0
-for cell in cells:
+for cell in cells_first_layer:
     outputs, _ = tf.nn.dynamic_rnn(
-        cell, input, dtype=tf.float32, scope=f'{i}')
-    all_outputs.append(outputs[-1])
-    i += 1
+        cell, input, dtype=tf.float32)
+    outputs_first_layer.append(outputs[-1])
+
+print("Feedforward first layer shape before concat: ",
+      outputs_first_layer[0].shape)
 
 # Get the last timestep, final_output shape is (10, 256)
-final_output = tf.concat(all_outputs, 1)
+final_output_first_layer = tf.concat(outputs_first_layer, 1)
+
+print("Feedforward first layer shape after concat: ",
+      final_output_first_layer.shape)
 
 # Using dense layer instead of manually creating weights and biases.
 # Using tanh as an activation function slows the process of learning, ReLU is better, but still no activation function at all is the best.
+feedforward_output_first_layer = tf.layers.dense(
+    inputs=final_output_first_layer, units=FIRST_LAYER_UNITS, activation=tf.tanh)
+
+print(f"Feedforward first layer shape after dense layer with {FIRST_LAYER_UNITS} units: ",
+      feedforward_output_first_layer.shape, "\n")
+
+feedforward_output_first_layer = tf.expand_dims(
+    feedforward_output_first_layer, axis=0)
+
+print("Feedforward first layer shape after expanding dims: ",
+      feedforward_output_first_layer.shape, "\n")
+
+################################# SECOND LAYER ################################
+
+cells_second_layer = [tf.contrib.rnn.LSTMBlockCell(
+    num_units=LSTM_SIZE, name=f'lstm_nr_{_}_second_layer') for _ in range(LSTM_NUMBER_SECOND_LAYER)]
+
+outputs_second_layer = []
+
+for cell in cells_second_layer:
+    outputs, _ = tf.nn.dynamic_rnn(
+        cell, feedforward_output_first_layer, dtype=tf.float32)
+    outputs_second_layer.append(outputs[-1])
+
+print("Feedforward second layer shape before concat: ",
+      outputs_second_layer[0].shape)
+
+final_output_second_layer = tf.concat(outputs_second_layer, 1)
+
+print("Feedforward second layer shape after concat: ",
+      final_output_second_layer.shape)
+
 logits = tf.layers.dense(
-    inputs=final_output, units=VOCAB_SIZE)
+    inputs=final_output_second_layer, units=VOCAB_SIZE)
+
+print(
+    f"Feedforward second layer shape after dense layer with {VOCAB_SIZE} units", logits.shape)
 
 #  Pass the output from the network to the softmax activation function and compute the cross entropy after that
 loss = tf.nn.softmax_cross_entropy_with_logits_v2(
@@ -132,16 +181,16 @@ with tf.Session() as sess:
 
         print(f"Accuracy at epoch {j}: {acc}")
 
-    # Testing using prediction operation - every consecutive sentence of length equal to SEQ_LENGTH from the whole text is passed as input, just like during training, but now we expect the network to output the sequence shifted by one character, so ideally generating the same text that was passed to it (excluding the very first character)
-    # for k in range(NUM_OF_SEQ):
-    #     test_input = X[k]
+# Testing using prediction operation - every consecutive sentence of length equal to SEQ_LENGTH from the whole text is passed as input, just like during training, but now we expect the network to output the sequence shifted by one character, so ideally generating the same text that was passed to it (excluding the very first character)
+# for k in range(NUM_OF_SEQ):
+#     test_input = X[k]
 
-    #     out = sess.run(prediction, feed_dict={input: [test_input]})
+#     out = sess.run(prediction, feed_dict={input: [test_input]})
 
-    #     if (k % SEQ_LENGTH == 0):
-    #         test_output_decoded = [
-    #             ix_to_char[np.argmax(fragment)] for fragment in out]
-    #         print(('').join(test_output_decoded), end='')
+#     if (k % SEQ_LENGTH == 0):
+#         test_output_decoded = [
+#             ix_to_char[np.argmax(fragment)] for fragment in out]
+#         print(('').join(test_output_decoded), end='')
 
     for k in range(NUM_OF_SEQ):
         test_input = X[k]
