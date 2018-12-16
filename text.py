@@ -1,6 +1,32 @@
 import numpy as np
 import tensorflow as tf
 
+tf.logging.set_verbosity(tf.logging.ERROR)
+
+
+def create_lstm_layer(num_of_lstms, lstm_size, feedforward_units, input, scope, activation_function, expand_dims):
+    cells = [tf.contrib.rnn.LSTMBlockCell(
+        num_units=lstm_size, name=f'{scope}_{_}') for _ in range(num_of_lstms)]
+
+    all_outputs = []
+
+    for cell in cells:
+        outputs, _ = tf.nn.dynamic_rnn(
+            cell, input, dtype=tf.float32)
+        all_outputs.append(outputs[-1])
+
+    concatenated_outputs = tf.concat(all_outputs, 1)
+
+    feedforward_outputs = tf.layers.dense(
+        inputs=concatenated_outputs, units=feedforward_units, activation=activation_function)
+
+    if expand_dims:
+        feedforward_outputs = tf.expand_dims(
+            feedforward_outputs, axis=0)
+
+    return feedforward_outputs
+
+
 with open('war_and_peace.txt', 'r') as f:
     data = f.read()
 
@@ -12,17 +38,12 @@ SEQ_LENGTH = 10
 NUM_OF_SEQ = len(data) // SEQ_LENGTH
 
 # Size of tensor containing hidden state of the cell, does not have any correlation with input, output or target
-LSTM_SIZE = 64
+LSTM_SIZE = 128
 # Number of LSTM cells to be used
-LSTM_NUMBER_FIRST_LAYER = 6
-LSTM_NUMBER_SECOND_LAYER = 4
-FIRST_LAYER_UNITS = 256
-NUM_EPOCHS = 30
-
-print(f'LSTM_SIZE = {LSTM_SIZE}')
-print(f'LSTM_NUMBER_FIRST_LAYER = {LSTM_NUMBER_FIRST_LAYER}')
-print(f'LSTM_NUMBER_SECOND_LAYER = {LSTM_NUMBER_SECOND_LAYER}')
-print(f'FIRST_LAYER_UNITS = {FIRST_LAYER_UNITS} \n\n')
+LSTM_NUMBER_FIRST_LAYER = 3
+LSTM_NUMBER_SECOND_LAYER = 2
+FIRST_LAYER_UNITS = 64
+NUM_EPOCHS = 10
 
 # Data preparation, one-hot encoded characters
 
@@ -72,78 +93,15 @@ input = tf.placeholder(tf.float32, shape=(
     None, SEQ_LENGTH, VOCAB_SIZE), name='input')
 
 # A placeholder for targets, i.e. a matrix of shape SEQ_LENGTH x VOCAB_SIZE, the shape of the placeholder is (None, SEQ_LENGTH, VOCAB_SIZE), because None is reserved for batch size
-targets = tf.placeholder(tf.float32, shape=(None,
-                                            SEQ_LENGTH, VOCAB_SIZE), name='targets')
+targets = tf.placeholder(tf.float32, shape=(
+    SEQ_LENGTH, VOCAB_SIZE), name='targets')
 
 
-################################# FIRST LAYER #################################
+first_layer_outputs = create_lstm_layer(num_of_lstms=LSTM_NUMBER_FIRST_LAYER, lstm_size=LSTM_SIZE,
+                                        feedforward_units=FIRST_LAYER_UNITS, input=input, scope='lstm_first_layer', activation_function=tf.tanh, expand_dims=True)
 
-# Creation of LSTM cells and setting size of their hidden tensors.
-# Creating more than one LSTM does not seem to improve the learning process.
-cells_first_layer = [tf.contrib.rnn.LSTMBlockCell(
-    num_units=LSTM_SIZE, name=f'lstm_nr_{_}_first_layer') for _ in range(LSTM_NUMBER_FIRST_LAYER)]
-
-# A list for storing last elements of outputs of every dynamic_rnn unrolling each LSTM cell
-outputs_first_layer = []
-
-# Unrolling each LSTM cell.
-# Input to the network needs to be specified as an argument. The returned values are: outputs and state.
-# Outputs is a list containing a hidden state tensor for every timestep when the network was unrolled.
-# State contains both the last hidden state and cell state, so outputs[-1] should be generally equal to state.h.
-# State will not be used, so its assigned to _
-for cell in cells_first_layer:
-    outputs, _ = tf.nn.dynamic_rnn(
-        cell, input, dtype=tf.float32)
-    outputs_first_layer.append(outputs[-1])
-
-print("Feedforward first layer shape before concat: ",
-      outputs_first_layer[0].shape)
-
-# Get the last timestep, final_output shape is (10, 256)
-final_output_first_layer = tf.concat(outputs_first_layer, 1)
-
-print("Feedforward first layer shape after concat: ",
-      final_output_first_layer.shape)
-
-# Using dense layer instead of manually creating weights and biases.
-# Using tanh as an activation function slows the process of learning, ReLU is better, but still no activation function at all is the best.
-feedforward_output_first_layer = tf.layers.dense(
-    inputs=final_output_first_layer, units=FIRST_LAYER_UNITS, activation=tf.tanh)
-
-print(f"Feedforward first layer shape after dense layer with {FIRST_LAYER_UNITS} units: ",
-      feedforward_output_first_layer.shape, "\n")
-
-feedforward_output_first_layer = tf.expand_dims(
-    feedforward_output_first_layer, axis=0)
-
-print("Feedforward first layer shape after expanding dims: ",
-      feedforward_output_first_layer.shape, "\n")
-
-################################# SECOND LAYER ################################
-
-cells_second_layer = [tf.contrib.rnn.LSTMBlockCell(
-    num_units=LSTM_SIZE, name=f'lstm_nr_{_}_second_layer') for _ in range(LSTM_NUMBER_SECOND_LAYER)]
-
-outputs_second_layer = []
-
-for cell in cells_second_layer:
-    outputs, _ = tf.nn.dynamic_rnn(
-        cell, feedforward_output_first_layer, dtype=tf.float32)
-    outputs_second_layer.append(outputs[-1])
-
-print("Feedforward second layer shape before concat: ",
-      outputs_second_layer[0].shape)
-
-final_output_second_layer = tf.concat(outputs_second_layer, 1)
-
-print("Feedforward second layer shape after concat: ",
-      final_output_second_layer.shape)
-
-logits = tf.layers.dense(
-    inputs=final_output_second_layer, units=VOCAB_SIZE)
-
-print(
-    f"Feedforward second layer shape after dense layer with {VOCAB_SIZE} units", logits.shape)
+logits = create_lstm_layer(num_of_lstms=LSTM_NUMBER_SECOND_LAYER, lstm_size=LSTM_SIZE,
+                           feedforward_units=VOCAB_SIZE, input=first_layer_outputs, scope='lstm_second_layer', activation_function=None, expand_dims=False)
 
 #  Pass the output from the network to the softmax activation function and compute the cross entropy after that
 loss = tf.nn.softmax_cross_entropy_with_logits_v2(
@@ -160,26 +118,33 @@ train_step = tf.train.RMSPropOptimizer(
     learning_rate=0.001, decay=0.9).minimize(cross_entropy)
 
 # Output 1 if a character was correctly predicted and 0 if it was not
-correct_prediction = tf.equal(tf.argmax(targets, 2),
+correct_prediction = tf.equal(tf.argmax(targets, 1),
                               tf.argmax(logits, 1))
 
 # Compute the mean to get the accuracy
 accuracy = (tf.reduce_mean(
     tf.cast(correct_prediction, tf.float32)))*100
 
+print()
+
 # # Create a session for executing the graph
 with tf.Session() as sess:
+    writer = tf.summary.FileWriter('./graphs', sess.graph)
     # Initialize tf.Variables
     sess.run(tf.global_variables_initializer())
 
     # Loop over for the number of epochs
     for j in range(NUM_EPOCHS):
-        # Feed one SEQ_LENGTH at a time to the network. Since RNN demands batch size, as the first dimension, the list of inputs must be passed to it. Hence, X[i] and y[i] are enclosed in square brackets to make a one-item list from them. Feed_dict is an argument used for passing data to previously defined placeholders. Train_setp and accuracy are computed, and accuracy is printed
+        # Feed one SEQ_LENGTH at a time to the network. Since RNN demands batch size, as the first dimension, the list of inputs must be passed to it. Hence, X[i] and y[i] are enclosed in square brackets to make a one-item list from them. Feed_dict is an argument used for passing data to previously defined placeholders. Train_step and accuracy are computed, and accuracy is printed
+
+        total_acc = 0
+
         for i in range(0, NUM_OF_SEQ):
             _, acc = sess.run([train_step, accuracy],
-                              feed_dict={input: [X[i]], targets: [y[i]]})
+                              feed_dict={input: [X[i]], targets: y[i]})
+            total_acc += acc
 
-        print(f"Accuracy at epoch {j}: {acc}")
+        print(f"Accuracy at epoch {j+1}: {(total_acc / NUM_OF_SEQ):.2f}")
 
 # Testing using prediction operation - every consecutive sentence of length equal to SEQ_LENGTH from the whole text is passed as input, just like during training, but now we expect the network to output the sequence shifted by one character, so ideally generating the same text that was passed to it (excluding the very first character)
 # for k in range(NUM_OF_SEQ):
@@ -191,6 +156,8 @@ with tf.Session() as sess:
 #         test_output_decoded = [
 #             ix_to_char[np.argmax(fragment)] for fragment in out]
 #         print(('').join(test_output_decoded), end='')
+
+    print()
 
     for k in range(NUM_OF_SEQ):
         test_input = X[k]
