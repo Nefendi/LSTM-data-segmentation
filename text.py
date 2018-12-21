@@ -2,9 +2,9 @@ import numpy as np
 import tensorflow as tf
 from textblob import TextBlob
 from random import shuffle
+import os
 
-tf.logging.set_verbosity(tf.logging.ERROR)
-
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 def create_lstm_layer(num_of_lstms, lstm_size, feedforward_units, input, scope, activation_function, expand_dims):
     # Create a pool of LSTM cells
@@ -112,51 +112,56 @@ word_to_ix = {word: ix for ix, word in enumerate(unique_words)}
 ix_to_tag = {0: 'NOUN', 1: 'VERB', 2: 'ADJECTIVE', 3: 'ADVERB', 4: 'OTHER'}
 
 # Number of unique words
-VOCAB_SIZE = len(unique_words)
+VOCABULARY_SIZE = len(unique_words)
 # Number of labels
-NUM_OF_CLASSES = len(ix_to_tag)
+NUM_OF_LABELS = len(ix_to_tag)
 # Length of one sequence of words input to the network
-SEQ_LENGTH = 10
+SEQUENCE_LENGTH = 10
 # Number of sequences that can be created from the input data
-NUM_OF_SEQ = len(words) // SEQ_LENGTH
+NUM_OF_SEQUENCES = len(words) // SEQUENCE_LENGTH
 # How much of the data is to be used for training
 TRAIN_DATA_FRACTION = 7 / 8
 # Set the number of training and test sequences
-TRAIN_DATA_NUM = int(TRAIN_DATA_FRACTION * NUM_OF_SEQ)
-TEST_DATA_NUM = NUM_OF_SEQ - TRAIN_DATA_NUM
+TRAIN_DATA_NUM = int(TRAIN_DATA_FRACTION * NUM_OF_SEQUENCES)
+TEST_DATA_NUM = NUM_OF_SEQUENCES - TRAIN_DATA_NUM
 
 OUTPUT_FILE = "results.txt"
+
+# Flag indicating if LSTMs are only in the forward pass mode
+ONLY_FW_PASS = True
 
 # Size of tensor containing hidden state of the cell, does not have any correlation with input, output or target
 LSTM_SIZE = 128
 # Number of LSTM cells to be used in the first layer
 LSTM_FW_NUMBER_FIRST_LAYER = 2
 LSTM_BW_NUMBER_FIRST_LAYER = 2
-LSTM_ONLY_FW_NUMBER_FIRST_LAYER = 3
+LSTM_ONLY_FW_NUMBER_FIRST_LAYER = 1
 
 # Number of LSTM cells to be used in the second layer
 LSTM_FW_NUMBER_SECOND_LAYER = 1
 LSTM_BW_NUMBER_SECOND_LAYER = 1
-LSTM_ONLY_FW_NUMBER_SECOND_LAYER = 2
+LSTM_ONLY_FW_NUMBER_SECOND_LAYER = 1
 
 # Number of output units from the feedforward layer in the first layer
 FIRST_LAYER_UNITS = 64
 # Number of epochs to be spend on learning
-NUM_EPOCHS = 20
+NUM_EPOCHS = 10
 
 # Data preparation, one-hot encoded words and labels
-X = np.zeros((NUM_OF_SEQ, SEQ_LENGTH, VOCAB_SIZE))
-y = np.zeros((NUM_OF_SEQ, SEQ_LENGTH, NUM_OF_CLASSES))
-for i in range(0, NUM_OF_SEQ):
-    X_sequence = words_pos_tags_indexed[i*SEQ_LENGTH:(i+1)*SEQ_LENGTH]
+X = np.zeros((NUM_OF_SEQUENCES, SEQUENCE_LENGTH, VOCABULARY_SIZE))
+y = np.zeros((NUM_OF_SEQUENCES, SEQUENCE_LENGTH, NUM_OF_LABELS))
+for i in range(0, NUM_OF_SEQUENCES):
+    X_sequence = words_pos_tags_indexed[i *
+        SEQUENCE_LENGTH:(i+1)*SEQUENCE_LENGTH]
     X_sequence_ix = [word_to_ix[word] for word, tag in X_sequence]
-    input_sequence = np.zeros((SEQ_LENGTH, VOCAB_SIZE))
-    for j in range(SEQ_LENGTH):
+    input_sequence = np.zeros((SEQUENCE_LENGTH, VOCABULARY_SIZE
+))
+    for j in range(SEQUENCE_LENGTH):
         input_sequence[j][X_sequence_ix[j]] = 1.
     X[i] = input_sequence
 
-    target_sequence = np.zeros((SEQ_LENGTH, NUM_OF_CLASSES))
-    for j in range(SEQ_LENGTH):
+    target_sequence = np.zeros((SEQUENCE_LENGTH, NUM_OF_LABELS))
+    for j in range(SEQUENCE_LENGTH):
         target_sequence[j][X_sequence[j][1]] = 1.
     y[i] = target_sequence
 
@@ -167,39 +172,65 @@ trainY = y[:TRAIN_DATA_NUM]
 testX = X[TRAIN_DATA_NUM:]
 testY = y[TRAIN_DATA_NUM:]
 
-print("\nFinished loading and preparing the data\n"
-      f"The number of sequences: {NUM_OF_SEQ}\n"
-      f"The number of training sequences: {TRAIN_DATA_NUM}\n"
-      f"The number of testing sequences: {TEST_DATA_NUM}\n")
+print("\nThe chosen architecture:\n\n"
+    f"Size of LSTM hidden vectors: {LSTM_SIZE}")
+
+if ONLY_FW_PASS:
+    print(f"Number of forward LSTMs in the first layer: {LSTM_ONLY_FW_NUMBER_FIRST_LAYER}\n"
+    f"Number of forward LSTMs in the second layer: {LSTM_ONLY_FW_NUMBER_SECOND_LAYER}", end='')
+else:
+    print(f"Number of forward LSTMs in the first layer: {LSTM_FW_NUMBER_FIRST_LAYER}\n"
+    f"Number of backward LSTMs in the first layer: {LSTM_BW_NUMBER_FIRST_LAYER}\n"
+    f"Number of forward LSTMs in the second layer: {LSTM_FW_NUMBER_SECOND_LAYER}\n"
+    f"Number of backward LSTMs in the second layer: {LSTM_BW_NUMBER_SECOND_LAYER}", end='')
+
+print(
+    f"\nNumber of units in the output of the first layer: {FIRST_LAYER_UNITS}\n")
 
 print("#" * 72, "\n")
 
+print("Finished loading and preparing the data!\n\n"
+      f"Sequence length: {SEQUENCE_LENGTH}\n"
+      f"Number of labels: {NUM_OF_LABELS}\n"
+      f"Number of different words: {VOCABULARY_SIZE}\n\n"
+      f"Number of sequences: {NUM_OF_SEQUENCES}\n"
+      f"Number of training sequences: {TRAIN_DATA_NUM}\n"
+      f"Number of test sequences: {TEST_DATA_NUM}\n\n"
+      f"Number of training epochs: {NUM_EPOCHS}\n")
+
+print("#" * 72)
+
 ###############################################################################
 
-# A placeholder for input, i.e. a matrix of shape SEQ_LENGTH x VOCAB_SIZE, the shape of the placeholder is (None, SEQ_LENGTH, VOCAB_SIZE), because None is reserved for batch size
-input = tf.placeholder(tf.float32, shape=(
-    None, SEQ_LENGTH, VOCAB_SIZE), name='input')
+# A placeholder for input, i.e. a matrix of shape SEQUENCE_LENGTH x VOCABULARY_SIZE
+# , the shape of the placeholder is (None, SEQUENCE_LENGTH, VOCABULARY_SIZE
+# ), because None is reserved for batch size
+input=tf.placeholder(tf.float32, shape = (
+    None, SEQUENCE_LENGTH, VOCABULARY_SIZE
+), name = 'input')
 
-# A placeholder for targets, i.e. a matrix of shape SEQ_LENGTH x NUM_OF_CLASSES, the shape of the placeholder is (SEQ_LENGTH, NUM_OF_CLASSES)
-targets = tf.placeholder(tf.float32, shape=(
-    SEQ_LENGTH, NUM_OF_CLASSES), name='targets')
+# A placeholder for targets, i.e. a matrix of shape SEQUENCE_LENGTH x NUM_OF_LABELS, the shape of the placeholder is (SEQUENCE_LENGTH, NUM_OF_LABELS)
+targets=tf.placeholder(tf.float32, shape = (
+    SEQUENCE_LENGTH, NUM_OF_LABELS), name = 'targets')
 
 ###############################################################################
 
-# Create LSTM layers with forward and backward passes
-# first_layer_outputs = create_lstm_layer_with_backward_pass(num_of_fw_lstms=LSTM_FW_NUMBER_FIRST_LAYER, num_of_bw_lstms=LSTM_BW_NUMBER_FIRST_LAYER, lstm_size=LSTM_SIZE,
-#                                                            feedforward_units=FIRST_LAYER_UNITS, input=input, scope='lstm_first_layer', activation_function=tf.tanh, expand_dims=True)
+print("\nStarting to build the model...")
 
-# logits = create_lstm_layer_with_backward_pass(num_of_fw_lstms=LSTM_FW_NUMBER_SECOND_LAYER, num_of_bw_lstms=LSTM_BW_NUMBER_SECOND_LAYER, lstm_size=LSTM_SIZE,
-#                                               feedforward_units=NUM_OF_CLASSES, input=first_layer_outputs, scope='lstm_second_layer', activation_function=None, expand_dims=False)
+if ONLY_FW_PASS:
+    # Create LSTM layers with forward pass only
+    first_layer_outputs=create_lstm_layer(num_of_lstms = LSTM_ONLY_FW_NUMBER_FIRST_LAYER, lstm_size = LSTM_SIZE,
+                                            feedforward_units = FIRST_LAYER_UNITS, input = input, scope = 'lstm_first_layer', activation_function = tf.tanh, expand_dims = True)
 
+    logits=create_lstm_layer(num_of_lstms = LSTM_ONLY_FW_NUMBER_SECOND_LAYER, lstm_size = LSTM_SIZE,
+                            feedforward_units=NUM_OF_LABELS, input=first_layer_outputs, scope='lstm_second_layer', activation_function=None, expand_dims=False)
+else:
+    # Create LSTM layers with forward and backward passes
+    first_layer_outputs = create_lstm_layer_with_backward_pass(num_of_fw_lstms=LSTM_FW_NUMBER_FIRST_LAYER, num_of_bw_lstms=LSTM_BW_NUMBER_FIRST_LAYER, lstm_size=LSTM_SIZE,
+                                                               feedforward_units=FIRST_LAYER_UNITS, input=input, scope='lstm_first_layer', activation_function=tf.tanh, expand_dims=True)
 
-# Create LSTM layers with forward pass only
-first_layer_outputs = create_lstm_layer(num_of_lstms=LSTM_ONLY_FW_NUMBER_FIRST_LAYER, lstm_size=LSTM_SIZE,
-                                        feedforward_units=FIRST_LAYER_UNITS, input=input, scope='lstm_first_layer', activation_function=tf.tanh, expand_dims=True)
-
-logits = create_lstm_layer(num_of_lstms=LSTM_ONLY_FW_NUMBER_SECOND_LAYER, lstm_size=LSTM_SIZE,
-                           feedforward_units=NUM_OF_CLASSES, input=first_layer_outputs, scope='lstm_second_layer', activation_function=None, expand_dims=False)
+    logits = create_lstm_layer_with_backward_pass(num_of_fw_lstms=LSTM_FW_NUMBER_SECOND_LAYER, num_of_bw_lstms=LSTM_BW_NUMBER_SECOND_LAYER, lstm_size=LSTM_SIZE,
+                                                  feedforward_units=NUM_OF_LABELS, input=first_layer_outputs, scope='lstm_second_layer', activation_function=None, expand_dims=False)
 
 ###############################################################################
 
@@ -225,6 +256,10 @@ correct_prediction = tf.equal(tf.argmax(targets, 1),
 accuracy = (tf.reduce_mean(
     tf.cast(correct_prediction, tf.float32))) * 100
 
+print("Finished building the model!")
+print('\n', "#" * 72, "\n")
+print("\nStarting the training!\n")
+
 # Create a session for executing the graph
 with tf.Session() as sess:
     # Initialize tf.Variables
@@ -238,7 +273,7 @@ with tf.Session() as sess:
         trainX_shuffled = [trainX[a] for a in shuffle_indices]
         trainY_shuffled = [trainY[a] for a in shuffle_indices]
 
-        # Feed one SEQ_LENGTH at a time to the network. Since RNN demands batch size, as the first dimension, the list of inputs must be passed to it. Hence, trainX_shuffled[i] is enclosed in square brackets to make a one-item list from it. Feed_dict is an argument used for passing data to previously defined placeholders. Train_step is computed
+        # Feed one SEQUENCE_LENGTH at a time to the network. Since RNN demands batch size, as the first dimension, the list of inputs must be passed to it. Hence, trainX_shuffled[i] is enclosed in square brackets to make a one-item list from it. Feed_dict is an argument used for passing data to previously defined placeholders. Train_step is computed
         for i in range(TRAIN_DATA_NUM):
             sess.run(train_step,
                      feed_dict={input: [trainX_shuffled[i]], targets: trainY_shuffled[i]})
@@ -254,9 +289,11 @@ with tf.Session() as sess:
         print(
             f"Testing accuracy at epoch {j+1}: {(total_test_acc / TEST_DATA_NUM):.2f}")
 
-    print('\n', "#" * 72, '\n')
+    print("\n\nFinished the training!\n")
+    print("#" * 72, '\n')
+    print(f"Printing words and their predicted and actual labels to the '{OUTPUT_FILE}' file...")
 
-    # After the training dump the decoded outputs to a file. The format is: <WORD> ---> <PREDICTED_LABEL> ---> <ACTUAL_LABEL>
+    # After the training dump the decoded outputs to a file. The format is: <WORD> <PREDICTED_LABEL> <ACTUAL_LABEL>
 
     with open(OUTPUT_FILE, 'w') as g:
 
@@ -280,6 +317,9 @@ with tf.Session() as sess:
             test_labels_decoded = [
                 ix_to_tag[np.argmax(label)] for label in test_labels]
 
-            for l in range(SEQ_LENGTH):
+            for l in range(SEQUENCE_LENGTH):
                 print(
                     f"{test_input_decoded[l]: <{padding}}{test_output_decoded[l]: <{padding}}{test_labels_decoded[l]: <{padding}}", file=g)
+
+    print("Finished printing the words and the labels!")
+    print("\nHave a jolly good day, kind Sirs :)\n\n")
