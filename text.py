@@ -6,6 +6,7 @@ import os
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
+
 def create_lstm_layer(num_of_lstms, lstm_size, feedforward_units, input, scope, activation_function, expand_dims):
     # Create a pool of LSTM cells
     cells = [tf.contrib.rnn.LSTMBlockCell(
@@ -116,11 +117,11 @@ VOCABULARY_SIZE = len(unique_words)
 # Number of labels
 NUM_OF_LABELS = len(ix_to_tag)
 # Length of one sequence of words input to the network
-SEQUENCE_LENGTH = 10
+SEQUENCE_LENGTH = 500
 # Number of sequences that can be created from the input data
 NUM_OF_SEQUENCES = len(words) // SEQUENCE_LENGTH
 # How much of the data is to be used for training
-TRAIN_DATA_FRACTION = 7 / 8
+TRAIN_DATA_FRACTION = 6 / 8
 # Set the number of training and test sequences
 TRAIN_DATA_NUM = int(TRAIN_DATA_FRACTION * NUM_OF_SEQUENCES)
 TEST_DATA_NUM = NUM_OF_SEQUENCES - TRAIN_DATA_NUM
@@ -128,19 +129,19 @@ TEST_DATA_NUM = NUM_OF_SEQUENCES - TRAIN_DATA_NUM
 OUTPUT_FILE = "results.txt"
 
 # Flag indicating if LSTMs are only in the forward pass mode
-ONLY_FW_PASS = True
+ONLY_FW_PASS = False
 
 # Size of tensor containing hidden state of the cell, does not have any correlation with input, output or target
 LSTM_SIZE = 128
 # Number of LSTM cells to be used in the first layer
 LSTM_FW_NUMBER_FIRST_LAYER = 2
 LSTM_BW_NUMBER_FIRST_LAYER = 2
-LSTM_ONLY_FW_NUMBER_FIRST_LAYER = 1
+LSTM_ONLY_FW_NUMBER_FIRST_LAYER = 4
 
 # Number of LSTM cells to be used in the second layer
 LSTM_FW_NUMBER_SECOND_LAYER = 1
 LSTM_BW_NUMBER_SECOND_LAYER = 1
-LSTM_ONLY_FW_NUMBER_SECOND_LAYER = 1
+LSTM_ONLY_FW_NUMBER_SECOND_LAYER = 2
 
 # Number of output units from the feedforward layer in the first layer
 FIRST_LAYER_UNITS = 64
@@ -152,10 +153,9 @@ X = np.zeros((NUM_OF_SEQUENCES, SEQUENCE_LENGTH, VOCABULARY_SIZE))
 y = np.zeros((NUM_OF_SEQUENCES, SEQUENCE_LENGTH, NUM_OF_LABELS))
 for i in range(0, NUM_OF_SEQUENCES):
     X_sequence = words_pos_tags_indexed[i *
-        SEQUENCE_LENGTH:(i+1)*SEQUENCE_LENGTH]
+                                        SEQUENCE_LENGTH:(i+1)*SEQUENCE_LENGTH]
     X_sequence_ix = [word_to_ix[word] for word, tag in X_sequence]
-    input_sequence = np.zeros((SEQUENCE_LENGTH, VOCABULARY_SIZE
-))
+    input_sequence = np.zeros((SEQUENCE_LENGTH, VOCABULARY_SIZE))
     for j in range(SEQUENCE_LENGTH):
         input_sequence[j][X_sequence_ix[j]] = 1.
     X[i] = input_sequence
@@ -173,16 +173,16 @@ testX = X[TRAIN_DATA_NUM:]
 testY = y[TRAIN_DATA_NUM:]
 
 print("\nThe chosen architecture:\n\n"
-    f"Size of LSTM hidden vectors: {LSTM_SIZE}")
+      f"Size of LSTM hidden vectors: {LSTM_SIZE}")
 
 if ONLY_FW_PASS:
     print(f"Number of forward LSTMs in the first layer: {LSTM_ONLY_FW_NUMBER_FIRST_LAYER}\n"
-    f"Number of forward LSTMs in the second layer: {LSTM_ONLY_FW_NUMBER_SECOND_LAYER}", end='')
+          f"Number of forward LSTMs in the second layer: {LSTM_ONLY_FW_NUMBER_SECOND_LAYER}", end='')
 else:
     print(f"Number of forward LSTMs in the first layer: {LSTM_FW_NUMBER_FIRST_LAYER}\n"
-    f"Number of backward LSTMs in the first layer: {LSTM_BW_NUMBER_FIRST_LAYER}\n"
-    f"Number of forward LSTMs in the second layer: {LSTM_FW_NUMBER_SECOND_LAYER}\n"
-    f"Number of backward LSTMs in the second layer: {LSTM_BW_NUMBER_SECOND_LAYER}", end='')
+          f"Number of backward LSTMs in the first layer: {LSTM_BW_NUMBER_FIRST_LAYER}\n"
+          f"Number of forward LSTMs in the second layer: {LSTM_FW_NUMBER_SECOND_LAYER}\n"
+          f"Number of backward LSTMs in the second layer: {LSTM_BW_NUMBER_SECOND_LAYER}", end='')
 
 print(
     f"\nNumber of units in the output of the first layer: {FIRST_LAYER_UNITS}\n")
@@ -192,7 +192,7 @@ print("#" * 72, "\n")
 print("Finished loading and preparing the data!\n\n"
       f"Sequence length: {SEQUENCE_LENGTH}\n"
       f"Number of labels: {NUM_OF_LABELS}\n"
-      f"Number of different words: {VOCABULARY_SIZE}\n\n"
+      f"Number of unique words: {VOCABULARY_SIZE}\n\n"
       f"Number of sequences: {NUM_OF_SEQUENCES}\n"
       f"Number of training sequences: {TRAIN_DATA_NUM}\n"
       f"Number of test sequences: {TEST_DATA_NUM}\n\n"
@@ -205,13 +205,13 @@ print("#" * 72)
 # A placeholder for input, i.e. a matrix of shape SEQUENCE_LENGTH x VOCABULARY_SIZE
 # , the shape of the placeholder is (None, SEQUENCE_LENGTH, VOCABULARY_SIZE
 # ), because None is reserved for batch size
-input=tf.placeholder(tf.float32, shape = (
+input = tf.placeholder(tf.float32, shape=(
     None, SEQUENCE_LENGTH, VOCABULARY_SIZE
-), name = 'input')
+), name='input')
 
 # A placeholder for targets, i.e. a matrix of shape SEQUENCE_LENGTH x NUM_OF_LABELS, the shape of the placeholder is (SEQUENCE_LENGTH, NUM_OF_LABELS)
-targets=tf.placeholder(tf.float32, shape = (
-    SEQUENCE_LENGTH, NUM_OF_LABELS), name = 'targets')
+targets = tf.placeholder(tf.float32, shape=(
+    SEQUENCE_LENGTH, NUM_OF_LABELS), name='targets')
 
 ###############################################################################
 
@@ -219,11 +219,11 @@ print("\nStarting to build the model...")
 
 if ONLY_FW_PASS:
     # Create LSTM layers with forward pass only
-    first_layer_outputs=create_lstm_layer(num_of_lstms = LSTM_ONLY_FW_NUMBER_FIRST_LAYER, lstm_size = LSTM_SIZE,
-                                            feedforward_units = FIRST_LAYER_UNITS, input = input, scope = 'lstm_first_layer', activation_function = tf.tanh, expand_dims = True)
+    first_layer_outputs = create_lstm_layer(num_of_lstms=LSTM_ONLY_FW_NUMBER_FIRST_LAYER, lstm_size=LSTM_SIZE,
+                                            feedforward_units=FIRST_LAYER_UNITS, input=input, scope='lstm_first_layer', activation_function=tf.tanh, expand_dims=True)
 
-    logits=create_lstm_layer(num_of_lstms = LSTM_ONLY_FW_NUMBER_SECOND_LAYER, lstm_size = LSTM_SIZE,
-                            feedforward_units=NUM_OF_LABELS, input=first_layer_outputs, scope='lstm_second_layer', activation_function=None, expand_dims=False)
+    logits = create_lstm_layer(num_of_lstms=LSTM_ONLY_FW_NUMBER_SECOND_LAYER, lstm_size=LSTM_SIZE,
+                               feedforward_units=NUM_OF_LABELS, input=first_layer_outputs, scope='lstm_second_layer', activation_function=None, expand_dims=False)
 else:
     # Create LSTM layers with forward and backward passes
     first_layer_outputs = create_lstm_layer_with_backward_pass(num_of_fw_lstms=LSTM_FW_NUMBER_FIRST_LAYER, num_of_bw_lstms=LSTM_BW_NUMBER_FIRST_LAYER, lstm_size=LSTM_SIZE,
@@ -291,7 +291,8 @@ with tf.Session() as sess:
 
     print("\n\nFinished the training!\n")
     print("#" * 72, '\n')
-    print(f"Printing words and their predicted and actual labels to the '{OUTPUT_FILE}' file...")
+    print(
+        f"Printing words and their predicted and actual labels to the '{OUTPUT_FILE}' file...")
 
     # After the training dump the decoded outputs to a file. The format is: <WORD> <PREDICTED_LABEL> <ACTUAL_LABEL>
 
