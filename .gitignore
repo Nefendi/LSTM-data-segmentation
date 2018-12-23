@@ -2,3 +2,6 @@
 __pycache__
 .vscode
 Documents/
+iccv09Data/
+wiki_727k/
+main.py
