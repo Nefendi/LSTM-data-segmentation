@@ -3,6 +3,7 @@ import tensorflow as tf
 from textblob import TextBlob
 from random import shuffle
 import os
+import time
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
@@ -73,6 +74,132 @@ def create_lstm_layer_with_backward_pass(num_of_fw_lstms, num_of_bw_lstms, lstm_
     return feedforward_outputs
 
 
+def build_text_annotation_model(is_onedirectional, lstm_size, fw_lstm_fst, bw_lstm_fst, fw_lstm_snd, bw_lstm_snd, feedforward_units_fst, feedforward_units_snd, data):
+    if is_onedirectional:
+        # Create LSTM layers with forward pass only
+        first_layer_outputs = create_lstm_layer(num_of_lstms=fw_lstm_fst, lstm_size=lstm_size,
+                                                feedforward_units=feedforward_units_fst, input=data, scope='lstm_first_layer', activation_function=tf.tanh, expand_dims=True)
+
+        logits = create_lstm_layer(num_of_lstms=fw_lstm_snd, lstm_size=lstm_size,
+                                   feedforward_units=feedforward_units_snd, input=first_layer_outputs, scope='lstm_second_layer', activation_function=None, expand_dims=False)
+    else:
+        # Create LSTM layers with forward and backward passes
+        first_layer_outputs = create_lstm_layer_with_backward_pass(num_of_fw_lstms=fw_lstm_fst, num_of_bw_lstms=bw_lstm_fst, lstm_size=lstm_size,
+                                                                   feedforward_units=feedforward_units_fst, input=data, scope='lstm_first_layer', activation_function=tf.tanh, expand_dims=True)
+
+        logits = create_lstm_layer_with_backward_pass(num_of_fw_lstms=fw_lstm_snd, num_of_bw_lstms=bw_lstm_snd, lstm_size=lstm_size,
+                                                      feedforward_units=feedforward_units_snd, input=first_layer_outputs, scope='lstm_second_layer', activation_function=None, expand_dims=False)
+
+    return logits
+
+
+def train_text_annotation_model(logits, targets, epochs):
+    # Pass the output from the network to the softmax activation function and compute the cross entropy after that
+    loss = tf.nn.softmax_cross_entropy_with_logits_v2(
+        labels=targets, logits=logits)
+
+    # Compute mean from loss to obtain one value to reflect the error of the network
+    cross_entropy = tf.reduce_mean(loss)
+
+    # Choose a method for performing backpropagation and tell it to minimize the loss
+    train_step = tf.train.RMSPropOptimizer(
+        learning_rate=0.001, decay=0.9).minimize(cross_entropy)
+
+    # Output 1 if a character was correctly predicted and 0 if it was not
+    correct_prediction = tf.equal(tf.argmax(targets, 1), tf.argmax(logits, 1))
+
+    # Compute the mean to get the accuracy
+    accuracy = (tf.reduce_mean(tf.cast(correct_prediction, tf.float32))) * 100
+
+    # Create a session for executing the graph
+    sess = tf.Session()
+
+    # Initialize tf.Variables
+    sess.run(tf.global_variables_initializer())
+
+    for j in range(epochs):
+        # Shuffle the input data and the corresponding labels
+        shuffle_indices = list(range(len(trainX)))
+        shuffle(shuffle_indices)
+
+        trainX_shuffled = [trainX[a] for a in shuffle_indices]
+        trainY_shuffled = [trainY[a] for a in shuffle_indices]
+
+        # Feed one SEQUENCE_LENGTH at a time to the network. Since RNN demands batch size, as the first dimension, the list of inputs must be passed to it. Hence, trainX_shuffled[i] is enclosed in square brackets to make a one-item list from it. Feed_dict is an argument used for passing data to previously defined placeholders. Train_step is computed
+        for i in range(TRAIN_DATA_NUM):
+            sess.run(train_step,
+                     feed_dict={input_data: [trainX_shuffled[i]], targets: trainY_shuffled[i]})
+
+        # Compute the mean accuracy of the network after each epoch over the entire test dataset
+        total_test_acc = 0
+
+        for k in range(TEST_DATA_NUM):
+            test_acc = sess.run(accuracy,
+                                feed_dict={input_data: [testX[k]], targets: testY[k]})
+            total_test_acc += test_acc
+
+        print(
+            f"Testing accuracy at epoch {j+1}: {(total_test_acc / TEST_DATA_NUM):.2f}")
+
+        return sess
+
+
+def test_text_annotation_model(logits, targets, sess):
+
+    # Output 1 if a character was correctly predicted and 0 if it was not
+    correct_prediction = tf.equal(tf.argmax(targets, 1), tf.argmax(logits, 1))
+
+    # Compute the mean to get the accuracy
+    accuracy = (tf.reduce_mean(tf.cast(correct_prediction, tf.float32))) * 100
+
+    print("\nStarting the testing phase!\n")
+
+    total_test_acc = 0
+
+    for k in range(TEST_DATA_NUM):
+        test_acc = sess.run(accuracy,
+                            feed_dict={input_data: [testX[k]], targets: testY[k]})
+        total_test_acc += test_acc
+
+    print(f"Testing accuracy: {(total_test_acc / TEST_DATA_NUM):.2f}")
+
+
+def predict_text_annotation_model(logits, output_file, sess):
+    # Create an operation for predicting after training - only softmax, no cross entropy, we do not want to calculate loss
+    prediction = tf.nn.softmax(logits, name='pred')
+
+    print(
+        f"\nPrinting words and their predicted and actual labels to the '{output_file}' file...")
+
+   # After the training dump the decoded outputs to a file. The format is: <WORD> <PREDICTED_LABEL> <ACTUAL_LABEL>
+
+    with open(output_file, 'w') as g:
+
+        padding = 25
+
+        print("{0: <{3}}{1: <{3}}{2: <{3}}\n".format(
+            "WORD", "PREDICTED_LABEL", "ACTUAL_LABEL", padding), file=g)
+
+        for k in range(TEST_DATA_NUM):
+            test_input = testX[k]
+            test_labels = testY[k]
+
+            out = sess.run(prediction, feed_dict={input_data: [test_input]})
+
+            test_input_decoded = [
+                ix_to_word[np.argmax(code)] for code in test_input]
+
+            test_output_decoded = [
+                ix_to_tag[np.argmax(fragment)] for fragment in out]
+
+            test_labels_decoded = [
+                ix_to_tag[np.argmax(label)] for label in test_labels]
+
+            for l in range(SEQUENCE_LENGTH):
+                print(
+                    f"{test_input_decoded[l]: <{padding}}{test_output_decoded[l]: <{padding}}{test_labels_decoded[l]: <{padding}}", file=g)
+
+
 with open('war_and_peace.txt', 'r') as f:
     data = f.read()
 
@@ -117,7 +244,7 @@ VOCABULARY_SIZE = len(unique_words)
 # Number of labels
 NUM_OF_LABELS = len(ix_to_tag)
 # Length of one sequence of words input to the network
-SEQUENCE_LENGTH = 500
+SEQUENCE_LENGTH = 10
 # Number of sequences that can be created from the input data
 NUM_OF_SEQUENCES = len(words) // SEQUENCE_LENGTH
 # How much of the data is to be used for training
@@ -146,7 +273,7 @@ LSTM_ONLY_FW_NUMBER_SECOND_LAYER = 2
 # Number of output units from the feedforward layer in the first layer
 FIRST_LAYER_UNITS = 64
 # Number of epochs to be spend on learning
-NUM_EPOCHS = 10
+NUM_EPOCHS = 1
 
 # Data preparation, one-hot encoded words and labels
 X = np.zeros((NUM_OF_SEQUENCES, SEQUENCE_LENGTH, VOCABULARY_SIZE))
@@ -172,155 +299,110 @@ trainY = y[:TRAIN_DATA_NUM]
 testX = X[TRAIN_DATA_NUM:]
 testY = y[TRAIN_DATA_NUM:]
 
-print("\nThe chosen architecture:\n\n"
-      f"Size of LSTM hidden vectors: {LSTM_SIZE}")
+# print("\nThe chosen architecture:\n\n"
+#       f"Size of LSTM hidden vectors: {LSTM_SIZE}")
 
-if ONLY_FW_PASS:
-    print(f"Number of forward LSTMs in the first layer: {LSTM_ONLY_FW_NUMBER_FIRST_LAYER}\n"
-          f"Number of forward LSTMs in the second layer: {LSTM_ONLY_FW_NUMBER_SECOND_LAYER}", end='')
-else:
-    print(f"Number of forward LSTMs in the first layer: {LSTM_FW_NUMBER_FIRST_LAYER}\n"
-          f"Number of backward LSTMs in the first layer: {LSTM_BW_NUMBER_FIRST_LAYER}\n"
-          f"Number of forward LSTMs in the second layer: {LSTM_FW_NUMBER_SECOND_LAYER}\n"
-          f"Number of backward LSTMs in the second layer: {LSTM_BW_NUMBER_SECOND_LAYER}", end='')
+# if ONLY_FW_PASS:
+#     print(f"Number of forward LSTMs in the first layer: {LSTM_ONLY_FW_NUMBER_FIRST_LAYER}\n"
+#           f"Number of forward LSTMs in the second layer: {LSTM_ONLY_FW_NUMBER_SECOND_LAYER}", end='')
+# else:
+#     print(f"Number of forward LSTMs in the first layer: {LSTM_FW_NUMBER_FIRST_LAYER}\n"
+#           f"Number of backward LSTMs in the first layer: {LSTM_BW_NUMBER_FIRST_LAYER}\n"
+#           f"Number of forward LSTMs in the second layer: {LSTM_FW_NUMBER_SECOND_LAYER}\n"
+#           f"Number of backward LSTMs in the second layer: {LSTM_BW_NUMBER_SECOND_LAYER}", end='')
 
-print(
-    f"\nNumber of units in the output of the first layer: {FIRST_LAYER_UNITS}\n")
+# print(
+#     f"\nNumber of units in the output of the first layer: {FIRST_LAYER_UNITS}\n")
 
-print("#" * 72, "\n")
+# print("#" * 72, "\n")
 
-print("Finished loading and preparing the data!\n\n"
-      f"Sequence length: {SEQUENCE_LENGTH}\n"
-      f"Number of labels: {NUM_OF_LABELS}\n"
-      f"Number of unique words: {VOCABULARY_SIZE}\n\n"
-      f"Number of sequences: {NUM_OF_SEQUENCES}\n"
-      f"Number of training sequences: {TRAIN_DATA_NUM}\n"
-      f"Number of test sequences: {TEST_DATA_NUM}\n\n"
-      f"Number of training epochs: {NUM_EPOCHS}\n")
+# print("Finished loading and preparing the data!\n\n"
+#       f"Sequence length: {SEQUENCE_LENGTH}\n"
+#       f"Number of labels: {NUM_OF_LABELS}\n"
+#       f"Number of unique words: {VOCABULARY_SIZE}\n\n"
+#       f"Number of sequences: {NUM_OF_SEQUENCES}\n"
+#       f"Number of training sequences: {TRAIN_DATA_NUM}\n"
+#       f"Number of test sequences: {TEST_DATA_NUM}\n\n"
+#       f"Number of training epochs: {NUM_EPOCHS}\n")
 
-print("#" * 72)
+# print("#" * 72)
 
-###############################################################################
+while True:
+    print("""
+    Welcome to the Text Annotator! Remember to follow the right sequence of instructions (load -> build -> train -> test or predict). Type the following commands to get started:
 
-# A placeholder for input, i.e. a matrix of shape SEQUENCE_LENGTH x VOCABULARY_SIZE
-# , the shape of the placeholder is (None, SEQUENCE_LENGTH, VOCABULARY_SIZE
-# ), because None is reserved for batch size
-input = tf.placeholder(tf.float32, shape=(
-    None, SEQUENCE_LENGTH, VOCABULARY_SIZE
-), name='input')
+    load    ---> load the training and testing data
+    build   ---> build the model
+    train   ---> train the model
+    test    ---> test the model
+    predict ---> generate predictions and write them to a file
+    quit    ---> quit the program
+    """)
 
-# A placeholder for targets, i.e. a matrix of shape SEQUENCE_LENGTH x NUM_OF_LABELS, the shape of the placeholder is (SEQUENCE_LENGTH, NUM_OF_LABELS)
-targets = tf.placeholder(tf.float32, shape=(
-    SEQUENCE_LENGTH, NUM_OF_LABELS), name='targets')
+    ans = input("What would you like to do? ---> ")
 
-###############################################################################
+    try:
 
-print("\nStarting to build the model...")
+        if ans == "load":
 
-if ONLY_FW_PASS:
-    # Create LSTM layers with forward pass only
-    first_layer_outputs = create_lstm_layer(num_of_lstms=LSTM_ONLY_FW_NUMBER_FIRST_LAYER, lstm_size=LSTM_SIZE,
-                                            feedforward_units=FIRST_LAYER_UNITS, input=input, scope='lstm_first_layer', activation_function=tf.tanh, expand_dims=True)
+            filename = input("Type the name of the file with text inside: ")
 
-    logits = create_lstm_layer(num_of_lstms=LSTM_ONLY_FW_NUMBER_SECOND_LAYER, lstm_size=LSTM_SIZE,
-                               feedforward_units=NUM_OF_LABELS, input=first_layer_outputs, scope='lstm_second_layer', activation_function=None, expand_dims=False)
-else:
-    # Create LSTM layers with forward and backward passes
-    first_layer_outputs = create_lstm_layer_with_backward_pass(num_of_fw_lstms=LSTM_FW_NUMBER_FIRST_LAYER, num_of_bw_lstms=LSTM_BW_NUMBER_FIRST_LAYER, lstm_size=LSTM_SIZE,
-                                                               feedforward_units=FIRST_LAYER_UNITS, input=input, scope='lstm_first_layer', activation_function=tf.tanh, expand_dims=True)
+        elif ans == "build":
 
-    logits = create_lstm_layer_with_backward_pass(num_of_fw_lstms=LSTM_FW_NUMBER_SECOND_LAYER, num_of_bw_lstms=LSTM_BW_NUMBER_SECOND_LAYER, lstm_size=LSTM_SIZE,
-                                                  feedforward_units=NUM_OF_LABELS, input=first_layer_outputs, scope='lstm_second_layer', activation_function=None, expand_dims=False)
+            print("\nStarting building the model...")
 
-###############################################################################
+            # A placeholder for input, i.e. a matrix of shape SEQUENCE_LENGTH x VOCABULARY_SIZE
+            # , the shape of the placeholder is (None, SEQUENCE_LENGTH, VOCABULARY_SIZE
+            # ), because None is reserved for batch size
+            input_data = tf.placeholder(tf.float32, shape=(
+                None, SEQUENCE_LENGTH, VOCABULARY_SIZE
+            ), name='input')
 
-#  Pass the output from the network to the softmax activation function and compute the cross entropy after that
-loss = tf.nn.softmax_cross_entropy_with_logits_v2(
-    labels=targets, logits=logits)
+            # A placeholder for targets, i.e. a matrix of shape SEQUENCE_LENGTH x NUM_OF_LABELS, the shape of the placeholder is (SEQUENCE_LENGTH, NUM_OF_LABELS)
+            targets = tf.placeholder(tf.float32, shape=(
+                SEQUENCE_LENGTH, NUM_OF_LABELS), name='targets')
 
-# Create an operation for predicting after training - only softmax, no cross entropy, we do not want to calculate loss
-prediction = tf.nn.softmax(logits, name='pred')
+            logits = build_text_annotation_model(False, LSTM_SIZE, LSTM_FW_NUMBER_FIRST_LAYER, LSTM_BW_NUMBER_FIRST_LAYER,
+                                                 LSTM_FW_NUMBER_SECOND_LAYER, LSTM_BW_NUMBER_SECOND_LAYER, FIRST_LAYER_UNITS, NUM_OF_LABELS, input_data)
 
-# Compute mean from loss to obtain one value to reflect the error of the network
-cross_entropy = tf.reduce_mean(loss)
+            print("\nFinished building the model!")
 
-# Choose a method for performing backpropagation and tell it to minimize the loss
-train_step = tf.train.RMSPropOptimizer(
-    learning_rate=0.001, decay=0.9).minimize(cross_entropy)
+        elif ans == "train":
 
-# Output 1 if a character was correctly predicted and 0 if it was not
-correct_prediction = tf.equal(tf.argmax(targets, 1),
-                              tf.argmax(logits, 1))
+            print("\nStarting training phase...\n")
 
-# Compute the mean to get the accuracy
-accuracy = (tf.reduce_mean(
-    tf.cast(correct_prediction, tf.float32))) * 100
+            sess = train_text_annotation_model(logits, targets, NUM_EPOCHS)
 
-print("Finished building the model!")
-print('\n', "#" * 72, "\n")
-print("\nStarting the training!\n")
+            print("\nFinished training phase!\n")
 
-# Create a session for executing the graph
-with tf.Session() as sess:
-    # Initialize tf.Variables
-    sess.run(tf.global_variables_initializer())
+        elif ans == "test":
 
-    for j in range(NUM_EPOCHS):
-        # Shuffle the input data and the corresponding labels
-        shuffle_indices = list(range(len(trainX)))
-        shuffle(shuffle_indices)
+            print("\nStarting testing phase...\n")
 
-        trainX_shuffled = [trainX[a] for a in shuffle_indices]
-        trainY_shuffled = [trainY[a] for a in shuffle_indices]
+            test_text_annotation_model(logits, targets, sess)
 
-        # Feed one SEQUENCE_LENGTH at a time to the network. Since RNN demands batch size, as the first dimension, the list of inputs must be passed to it. Hence, trainX_shuffled[i] is enclosed in square brackets to make a one-item list from it. Feed_dict is an argument used for passing data to previously defined placeholders. Train_step is computed
-        for i in range(TRAIN_DATA_NUM):
-            sess.run(train_step,
-                     feed_dict={input: [trainX_shuffled[i]], targets: trainY_shuffled[i]})
+            print("\nFinished testing phase!\n")
 
-        # Compute the mean accuracy of the network after each epoch over the entire test dataset
-        total_test_acc = 0
+        elif ans == "predict":
 
-        for k in range(TEST_DATA_NUM):
-            test_acc = sess.run(accuracy,
-                                feed_dict={input: [testX[k]], targets: testY[k]})
-            total_test_acc += test_acc
+            predict_filename = input(
+                "Type the name of the file to write predictions to: ")
 
+            predict_text_annotation_model(logits, predict_filename, sess)
+
+            print("\nFinished printing the words and the labels!\n")
+
+        elif ans == "quit":
+
+            break
+
+    except:
         print(
-            f"Testing accuracy at epoch {j+1}: {(total_test_acc / TEST_DATA_NUM):.2f}")
+            "\nSorry, probably you did not follow the right order of instructions :( Please, try again!\n")
 
-    print("\n\nFinished the training!\n")
-    print("#" * 72, '\n')
-    print(
-        f"Printing words and their predicted and actual labels to the '{OUTPUT_FILE}' file...")
+    print("\n", "#" * 72, "\n\n")
 
-    # After the training dump the decoded outputs to a file. The format is: <WORD> <PREDICTED_LABEL> <ACTUAL_LABEL>
+    # time.sleep(3)
+    # os.system('cls' if os.name == 'nt' else 'clear')
 
-    with open(OUTPUT_FILE, 'w') as g:
-
-        padding = 25
-
-        print("{0: <{3}}{1: <{3}}{2: <{3}}\n".format(
-            "WORD", "PREDICTED_LABEL", "ACTUAL_LABEL", padding), file=g)
-
-        for k in range(TEST_DATA_NUM):
-            test_input = testX[k]
-            test_labels = testY[k]
-
-            out = sess.run(prediction, feed_dict={input: [test_input]})
-
-            test_input_decoded = [
-                ix_to_word[np.argmax(code)] for code in test_input]
-
-            test_output_decoded = [
-                ix_to_tag[np.argmax(fragment)] for fragment in out]
-
-            test_labels_decoded = [
-                ix_to_tag[np.argmax(label)] for label in test_labels]
-
-            for l in range(SEQUENCE_LENGTH):
-                print(
-                    f"{test_input_decoded[l]: <{padding}}{test_output_decoded[l]: <{padding}}{test_labels_decoded[l]: <{padding}}", file=g)
-
-    print("Finished printing the words and the labels!")
-    print("\nHave a jolly good day, kind Sirs :)\n\n")
+print("\nThank you for using me! Have a jolly good day, goodbye :)\n")
