@@ -3,7 +3,6 @@ import tensorflow as tf
 from textblob import TextBlob
 from random import shuffle
 import os
-import time
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
@@ -120,7 +119,7 @@ def load_and_parse_data(filename, seq_length, train_test_dataset_split_factor):
     # Number of labels
     num_of_labels = len(ix_to_tag)
     # Number of sequences that can be created from the input data
-    num_of_sequences = len(words) // seq_length
+    num_of_sequences = len(words) - seq_length + 1
     # How much of the data is to be used for training
     train_data_num = int(train_test_dataset_split_factor * num_of_sequences)
     test_data_num = num_of_sequences - train_data_num
@@ -128,9 +127,10 @@ def load_and_parse_data(filename, seq_length, train_test_dataset_split_factor):
     # Data preparation, one-hot encoded words and labels
     X = np.zeros((num_of_sequences, seq_length, vocabulary_size))
     y = np.zeros((num_of_sequences, seq_length, num_of_labels))
-    for i in range(0, num_of_sequences):
-        X_sequence = words_pos_tags_indexed[i *
-                                            seq_length:(i+1)*seq_length]
+
+    # +1 to include the last sequence
+    for i in range(num_of_sequences):
+        X_sequence = words_pos_tags_indexed[i:seq_length + i]
         X_sequence_ix = [word_to_ix[word] for word, tag in X_sequence]
         input_sequence = np.zeros((seq_length, vocabulary_size))
         for j in range(seq_length):
@@ -152,8 +152,8 @@ def load_and_parse_data(filename, seq_length, train_test_dataset_split_factor):
     return vocabulary_size, num_of_labels, ix_to_word, word_to_ix, ix_to_tag, trainX, trainY, testX, testY, train_data_num, test_data_num, words
 
 
-def build_text_annotation_model(is_onedirectional, lstm_size, fw_lstm_fst, bw_lstm_fst, fw_lstm_snd, bw_lstm_snd, feedforward_units_fst, feedforward_units_snd, data):
-    if is_onedirectional:
+def build_text_annotation_model(is_unidirectional, lstm_size, fw_lstm_fst, bw_lstm_fst, fw_lstm_snd, bw_lstm_snd, feedforward_units_fst, feedforward_units_snd, data):
+    if is_unidirectional:
         # Create LSTM layers with forward pass only
         first_layer_outputs = create_lstm_layer(num_of_lstms=fw_lstm_fst, lstm_size=lstm_size,
                                                 feedforward_units=feedforward_units_fst, input=data, scope='lstm_first_layer', activation_function=tf.tanh, expand_dims=True)
@@ -197,16 +197,16 @@ def train_text_annotation_model(logits, targets, trainX, trainY, testX, testY, t
 
     for j in range(epochs):
         # Shuffle the input data and the corresponding labels
-        shuffle_indices = list(range(len(trainX)))
-        shuffle(shuffle_indices)
+        # shuffle_indices = list(range(len(trainX)))
+        # shuffle(shuffle_indices)
 
-        trainX_shuffled = [trainX[a] for a in shuffle_indices]
-        trainY_shuffled = [trainY[a] for a in shuffle_indices]
+        # trainX_shuffled = [trainX[a] for a in shuffle_indices]
+        # trainY_shuffled = [trainY[a] for a in shuffle_indices]
 
         # Feed one SEQUENCE_LENGTH at a time to the network. Since RNN demands batch size, as the first dimension, the list of inputs must be passed to it. Hence, trainX_shuffled[i] is enclosed in square brackets to make a one-item list from it. Feed_dict is an argument used for passing data to previously defined placeholders. Train_step is computed
         for i in range(train_data_num):
             sess.run(train_step,
-                     feed_dict={input_data: [trainX_shuffled[i]], targets: trainY_shuffled[i]})
+                     feed_dict={input_data: [trainX[i]], targets: trainY[i]})
 
         # Compute the mean accuracy of the network after each epoch over the entire test dataset
         total_test_acc = 0
@@ -219,7 +219,7 @@ def train_text_annotation_model(logits, targets, trainX, trainY, testX, testY, t
         print(
             f"Testing accuracy at epoch {j+1}: {(total_test_acc / test_data_num):.2f}")
 
-        return sess
+    return sess
 
 
 def predict_text_annotation_model(logits, ix_to_word, word_to_ix, seq_length, num_of_labels, vocabulary_size, original_dataset, input_file, output_file, sess):
@@ -239,12 +239,12 @@ def predict_text_annotation_model(logits, ix_to_word, word_to_ix, seq_length, nu
     words = [word for word in words if word in original_dataset]
 
     # Number of sequences that can be created from the input data
-    num_of_sequences = len(words) // seq_length
+    num_of_sequences = len(words) - seq_length + 1
 
     # Data preparation, one-hot encoded words and labels
     X = np.zeros((num_of_sequences, seq_length, vocabulary_size))
-    for i in range(0, num_of_sequences):
-        X_sequence = words[i * seq_length: (i+1) * seq_length]
+    for i in range(num_of_sequences):
+        X_sequence = words[i:seq_length + i]
         X_sequence_ix = [word_to_ix[word] for word in X_sequence]
         input_sequence = np.zeros((seq_length, vocabulary_size))
         for j in range(seq_length):
@@ -277,13 +277,10 @@ def predict_text_annotation_model(logits, ix_to_word, word_to_ix, seq_length, nu
             prediction_output_decoded = [
                 ix_to_tag[np.argmax(fragment)] for fragment in out]
 
-            for l in range(SEQUENCE_LENGTH):
-                print(
-                    f"{prediction_input_decoded[l]: <{padding}}{prediction_output_decoded[l]: <{padding}}", file=g)
+            # Print only the first element of every sequence to avoid duplications
+            print(
+                f"{prediction_input_decoded[0]: <{padding}}{prediction_output_decoded[0]: <{padding}}", file=g)
 
-
-# The length of a single sequence of words passed to LSTM cells
-SEQUENCE_LENGTH = 10
 
 # Size of tensor containing hidden state of the cell, does not have any correlation with input, output or target
 LSTM_SIZE = 128
@@ -299,11 +296,9 @@ LSTM_ONLY_FW_NUMBER_SECOND_LAYER = 2
 
 # Number of output units from the feedforward layer in the first layer
 FIRST_LAYER_UNITS = 64
-# Number of epochs to be spend on learning
-NUM_EPOCHS = 1
 
 print("""
-    Welcome to the Text Annotator! Remember to follow the right sequence of instructions (load -> train -> predict). Type the following commands to get started:
+    Welcome to the Part-of-Speech Tagger! Remember to follow the right sequence of instructions (load -> train -> predict). Type the following commands to get started:
 
     load    ---> load the training and testing data and build the model
     train   ---> train the model
@@ -313,17 +308,27 @@ print("""
 
 while True:
     ans = input("What would you like to do? ---> ")
-
+    print()
     try:
 
         if ans == "load":
 
             filename = input("Type the name of the file with text inside: ")
+            seq_len = int(input("Enter the length of a sequence: "))
+            train_test_set_split = float(input(
+                "Enter a number specifying what part of the dataset should be used for training: "))
+            is_unidirectional = input(
+                "Should the model be unidirectional? [y/n]: ")
+
+            if (is_unidirectional == 'y'):
+                is_unidirectional = True
+            else:
+                is_unidirectional = False
 
             print("\nStarting loading and preparing the data...")
 
             vocabulary_size, num_of_labels, ix_to_word, word_to_ix, ix_to_tag, trainX, trainY, testX, testY, train_data_num, test_data_num, original_dataset = load_and_parse_data(
-                filename, SEQUENCE_LENGTH, 7/8)
+                filename, seq_len, train_test_set_split)
 
             print("\nFinished loading and preparing the data!")
 
@@ -331,28 +336,31 @@ while True:
 
             tf.reset_default_graph()
 
-            # A placeholder for input, i.e. a matrix of shape SEQUENCE_LENGTH x VOCABULARY_SIZE
-            # , the shape of the placeholder is (None, SEQUENCE_LENGTH, VOCABULARY_SIZE
+            # A placeholder for input, i.e. a matrix of shape seq_len x vocabulary_size
+            # , the shape of the placeholder is (None, seq_len, vocabulary_size
             # ), because None is reserved for batch size
             input_data = tf.placeholder(tf.float32, shape=(
-                None, SEQUENCE_LENGTH, vocabulary_size
+                None, seq_len, vocabulary_size
             ), name='input')
 
-            # A placeholder for targets, i.e. a matrix of shape SEQUENCE_LENGTH x NUM_OF_LABELS, the shape of the placeholder is (SEQUENCE_LENGTH, NUM_OF_LABELS)
+            # A placeholder for targets, i.e. a matrix of shape seq_len x num_of_labels, the shape of the placeholder is (seq_len, NUM_OF_LABELS)
             targets = tf.placeholder(tf.float32, shape=(
-                SEQUENCE_LENGTH, num_of_labels), name='targets')
+                seq_len, num_of_labels), name='targets')
 
-            logits = build_text_annotation_model(False, LSTM_SIZE, LSTM_FW_NUMBER_FIRST_LAYER, LSTM_BW_NUMBER_FIRST_LAYER,
+            logits = build_text_annotation_model(is_unidirectional, LSTM_SIZE, LSTM_FW_NUMBER_FIRST_LAYER, LSTM_BW_NUMBER_FIRST_LAYER,
                                                  LSTM_FW_NUMBER_SECOND_LAYER, LSTM_BW_NUMBER_SECOND_LAYER, FIRST_LAYER_UNITS, num_of_labels, input_data)
 
             print("\nFinished building the model!")
 
         elif ans == "train":
 
+            num_epochs = int(input(
+                "Specify how many epochs should the training last: "))
+
             print("\nStarting training phase...\n")
 
             sess = train_text_annotation_model(
-                logits, targets, trainX, trainY, testX, testY, train_data_num, test_data_num, NUM_EPOCHS)
+                logits, targets, trainX, trainY, testX, testY, train_data_num, test_data_num, num_epochs)
 
             print("\nFinished training phase!\n")
 
@@ -365,7 +373,7 @@ while True:
                 "Type the name of the file to write predictions to: ")
 
             predict_text_annotation_model(
-                logits, ix_to_word, word_to_ix, SEQUENCE_LENGTH, num_of_labels, vocabulary_size, original_dataset, input_file, output_file, sess)
+                logits, ix_to_word, word_to_ix, seq_len, num_of_labels, vocabulary_size, original_dataset, input_file, output_file, sess)
 
             print("\nFinished printing the words and the labels!\n")
 
