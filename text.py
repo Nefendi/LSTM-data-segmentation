@@ -1,10 +1,11 @@
 import numpy as np
 import tensorflow as tf
 from textblob import TextBlob
-from random import shuffle
 import os
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
+UNKNOWN_WORD = "UNKNOWN_WORD"
 
 
 def create_lstm_layer(num_of_lstms, lstm_size, feedforward_units, input, scope, activation_function, expand_dims):
@@ -27,7 +28,7 @@ def create_lstm_layer(num_of_lstms, lstm_size, feedforward_units, input, scope, 
     feedforward_outputs = tf.layers.dense(
         inputs=concatenated_outputs, units=feedforward_units, activation=activation_function)
 
-    # If this is not the output layer, expand dimensions, so that the outputs can be passed to the next LSTM layer (TensorFlow syntax needs this)
+    # If this is not the output layer, expand dimensions, so that the outputs can be passed to the next LSTM layer
     if expand_dims:
         feedforward_outputs = tf.expand_dims(
             feedforward_outputs, axis=0)
@@ -86,6 +87,8 @@ def load_and_parse_data(filename, seq_length, train_test_dataset_split_factor):
     words = [word for word, tag in words_pos_tags]
     # Remove duplicates
     unique_words = list(set(words))
+    # Add a placeholder used for unknown words during predicting labels after training
+    unique_words.append(UNKNOWN_WORD)
 
     words_pos_tags_indexed = []
 
@@ -128,7 +131,6 @@ def load_and_parse_data(filename, seq_length, train_test_dataset_split_factor):
     X = np.zeros((num_of_sequences, seq_length, vocabulary_size))
     y = np.zeros((num_of_sequences, seq_length, num_of_labels))
 
-    # +1 to include the last sequence
     for i in range(num_of_sequences):
         X_sequence = words_pos_tags_indexed[i:seq_length + i]
         X_sequence_ix = [word_to_ix[word] for word, tag in X_sequence]
@@ -155,10 +157,10 @@ def load_and_parse_data(filename, seq_length, train_test_dataset_split_factor):
 def build_text_annotation_model(is_unidirectional, lstm_size, fw_lstm_fst, bw_lstm_fst, fw_lstm_snd, bw_lstm_snd, feedforward_units_fst, feedforward_units_snd, data):
     if is_unidirectional:
         # Create LSTM layers with forward pass only
-        first_layer_outputs = create_lstm_layer(num_of_lstms=fw_lstm_fst, lstm_size=lstm_size,
+        first_layer_outputs = create_lstm_layer(num_of_lstms=fw_lstm_fst + bw_lstm_fst, lstm_size=lstm_size,
                                                 feedforward_units=feedforward_units_fst, input=data, scope='lstm_first_layer', activation_function=tf.tanh, expand_dims=True)
 
-        logits = create_lstm_layer(num_of_lstms=fw_lstm_snd, lstm_size=lstm_size,
+        logits = create_lstm_layer(num_of_lstms=fw_lstm_snd + bw_lstm_snd, lstm_size=lstm_size,
                                    feedforward_units=feedforward_units_snd, input=first_layer_outputs, scope='lstm_second_layer', activation_function=None, expand_dims=False)
     else:
         # Create LSTM layers with forward and backward passes
@@ -192,18 +194,12 @@ def train_text_annotation_model(logits, targets, trainX, trainY, testX, testY, t
     # Create a session for executing the graph
     sess = tf.Session()
 
-    # Initialize tf.Variables
+    # Initialise tf.Variables
     sess.run(tf.global_variables_initializer())
 
     for j in range(epochs):
-        # Shuffle the input data and the corresponding labels
-        # shuffle_indices = list(range(len(trainX)))
-        # shuffle(shuffle_indices)
 
-        # trainX_shuffled = [trainX[a] for a in shuffle_indices]
-        # trainY_shuffled = [trainY[a] for a in shuffle_indices]
-
-        # Feed one SEQUENCE_LENGTH at a time to the network. Since RNN demands batch size, as the first dimension, the list of inputs must be passed to it. Hence, trainX_shuffled[i] is enclosed in square brackets to make a one-item list from it. Feed_dict is an argument used for passing data to previously defined placeholders. Train_step is computed
+        # Feed one seq_length at a time to the network. Since RNN demands batch size, as the first dimension, the list of inputs must be passed to it. Hence, trainX[i] is enclosed in square brackets to make a one-item list from it. Feed_dict is an argument used for passing data to the previously defined placeholders.
         for i in range(train_data_num):
             sess.run(train_step,
                      feed_dict={input_data: [trainX[i]], targets: trainY[i]})
@@ -235,8 +231,8 @@ def predict_text_annotation_model(logits, ix_to_word, word_to_ix, seq_length, nu
     data = TextBlob(data)
     words = data.words
 
-    # Remove words that were not present in the training and test dataset
-    words = [word for word in words if word in original_dataset]
+    # Replace words that were present neither in the training nor in the test dataset
+    words = [word if word in original_dataset else UNKNOWN_WORD for word in words]
 
     # Number of sequences that can be created from the input data
     num_of_sequences = len(words) - seq_length + 1
@@ -256,7 +252,7 @@ def predict_text_annotation_model(logits, ix_to_word, word_to_ix, seq_length, nu
     print(
         f"\nPrinting words and their predicted labels to the '{output_file}' file...")
 
-   # After the training dump the decoded outputs to a file. The format is: <WORD> <PREDICTED_LABEL> <ACTUAL_LABEL>
+   # After the training dump the decoded outputs to a file. The format is: <WORD> <PREDICTED_LABEL>
 
     with open(output_file, 'w') as g:
 
@@ -277,9 +273,14 @@ def predict_text_annotation_model(logits, ix_to_word, word_to_ix, seq_length, nu
             prediction_output_decoded = [
                 ix_to_tag[np.argmax(fragment)] for fragment in out]
 
-            # Print only the first element of every sequence to avoid duplications
-            print(
-                f"{prediction_input_decoded[0]: <{padding}}{prediction_output_decoded[0]: <{padding}}", file=g)
+            # Print only the first element of every sequence to avoid duplications if it is not the last one
+            if (k < num_of_sequences - 1):
+                print(
+                    f"{prediction_input_decoded[0]: <{padding}}{prediction_output_decoded[0]: <{padding}}", file=g)
+            else:
+                for a in range(seq_length):
+                    print(
+                        f"{prediction_input_decoded[a]: <{padding}}{prediction_output_decoded[a]: <{padding}}", file=g)
 
 
 # Size of tensor containing hidden state of the cell, does not have any correlation with input, output or target
@@ -287,12 +288,10 @@ LSTM_SIZE = 128
 # Number of LSTM cells to be used in the first layer
 LSTM_FW_NUMBER_FIRST_LAYER = 2
 LSTM_BW_NUMBER_FIRST_LAYER = 2
-LSTM_ONLY_FW_NUMBER_FIRST_LAYER = 4
 
 # Number of LSTM cells to be used in the second layer
 LSTM_FW_NUMBER_SECOND_LAYER = 1
 LSTM_BW_NUMBER_SECOND_LAYER = 1
-LSTM_ONLY_FW_NUMBER_SECOND_LAYER = 2
 
 # Number of output units from the feedforward layer in the first layer
 FIRST_LAYER_UNITS = 64
@@ -343,7 +342,7 @@ while True:
                 None, seq_len, vocabulary_size
             ), name='input')
 
-            # A placeholder for targets, i.e. a matrix of shape seq_len x num_of_labels, the shape of the placeholder is (seq_len, NUM_OF_LABELS)
+            # A placeholder for targets, i.e. a matrix of shape seq_len x num_of_labels, the shape of the placeholder is (seq_len, num_of_labels)
             targets = tf.placeholder(tf.float32, shape=(
                 seq_len, num_of_labels), name='targets')
 
